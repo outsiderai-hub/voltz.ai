@@ -1,10 +1,6 @@
-
 <title>VOLTz by OUTSIDER</title>
-
 <script>
-charset utf-8;
-source_charset utf-8;
-  /* aplica a aparência salva ANTES da pintura (evita flash de tema) */
+/* aplica a aparência salva ANTES da pintura (evita flash de tema) */
 try{
   var _s = JSON.parse(localStorage.getItem('voltz-app') || '{}');
   var _rt = document.documentElement;
@@ -1026,6 +1022,18 @@ body[data-role="none"] .chrome .note{display:none}
     <div class="m-actions">
       <button class="btn btn-ghost btn-sm" id="nc-cancel">Fechar</button>
       <button class="btn btn-primary btn-sm" id="nc-create">⚡ Criar cliente</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: FONTES DE DADOS / INTEGRAÇÕES (staff) ============ -->
+<div class="modal-wrap" id="integ-modal">
+  <div class="modal" role="dialog" aria-labelledby="ig-title">
+    <h3 id="ig-title">Fontes de dados</h3>
+    <p class="m-sub">De onde entram os leads deste cliente. Esta tela é interna da OUTSIDER — o cliente nunca a vê.</p>
+    <div id="ig-body"></div>
+    <div class="m-actions">
+      <button class="btn btn-ghost btn-sm" id="ig-close">Fechar</button>
     </div>
   </div>
 </div>
@@ -2216,10 +2224,12 @@ function renderAdmin(){
       tdH.append(cp);
     } else tdH.textContent = '—';
     tr.append(tdH);
-    const tdA = el('td');
+    const tdA = el('td'); tdA.style.cssText = 'display:flex;gap:6px;justify-content:flex-end';
+    const fontes = el('button', 'btn btn-secondary btn-sm', '🔌 Fontes');
+    fontes.addEventListener('click', () => openInteg(c));
     const go = el('button', 'btn btn-secondary btn-sm', 'Entrar →');
     go.addEventListener('click', () => enterWorkspace(c));
-    tdA.append(go); tr.append(tdA);
+    tdA.append(fontes, go); tr.append(tdA);
     tb.append(tr);
   });
   if(!ADMIN_CLIENTS.length){
@@ -2229,6 +2239,93 @@ function renderAdmin(){
     tr.append(td); tb.append(tr);
   }
 }
+/* ---------- Integrações / fontes de dados (staff-only) ---------- */
+let IG_ORG = null;
+async function openInteg(c){
+  if(!isAdmin()) return;
+  IG_ORG = c.org;
+  $('#ig-title').textContent = 'Fontes de dados — ' + c.org.name;
+  const body = $('#ig-body'); body.innerHTML = '';
+  body.append(el('div', 'm-sub', 'Carregando…'));
+  $('#integ-modal').classList.add('open');
+  const { data, error } = await SB.from('integrations')
+    .select('id,source,status,webhook_token,credentials,last_event_at')
+    .eq('org_id', c.org.id);
+  body.innerHTML = '';
+  if(error){ body.append(el('div', 'invite-out', 'Erro ao carregar: ' + error.message)); return; }
+  renderInteg(data || []);
+}
+function igSec(txt){ const d = el('div', 'sec-head'); d.style.marginTop = '22px'; d.append(el('span', 'pill', txt)); return d; }
+function igAgo(ts){ return ts ? 'último lead ' + fmtAgo(Math.floor((Date.now() - new Date(ts).getTime()) / 60000)) : 'nenhum lead ainda'; }
+function igCopyRow(label, url){
+  const wrap = el('div', 'invite-out');
+  wrap.append(el('b', null, url), document.createElement('br'));
+  const cp = el('button', 'btn btn-secondary btn-sm', 'copiar'); cp.style.marginTop = '8px';
+  cp.addEventListener('click', () => { try{ navigator.clipboard.writeText(url); }catch(e){} toast(label + ' copiada.', '🔗'); });
+  wrap.append(cp); return wrap;
+}
+function renderInteg(list){
+  const body = $('#ig-body'); body.innerHTML = '';
+  const site = list.find(i => i.source === 'webhook');
+  const meta = list.find(i => i.source === 'meta');
+
+  // Site / Landing Page (Webhook Universal)
+  body.append(igSec('🌐 Site / Landing Page'));
+  if(site){
+    body.append(igCopyRow('URL do Webhook Universal', CFG.SUPABASE_URL + '/functions/v1/ingest?token=' + site.webhook_token));
+    const p = el('p', 'm-sub', 'Cole essa URL em qualquer formulário/landing page do cliente — recebe leads na hora. ' + igAgo(site.last_event_at) + '.');
+    p.style.marginTop = '8px'; body.append(p);
+  } else body.append(el('div', 'invite-out', 'Sem Webhook Universal para este cliente.'));
+
+  // Meta Lead Ads
+  body.append(igSec('📣 Meta Lead Ads'));
+  if(meta){
+    const st = el('div'); st.style.margin = '4px 0 12px';
+    st.append(el('span', 'st ' + (meta.status === 'error' ? 'st-err' : 'st-ok'), meta.status === 'error' ? '⚠ com erro' : '● conectada'));
+    st.append(el('span', null, '  Página '), el('b', null, (meta.credentials || {}).page_id || '—'), el('span', null, '  · ' + igAgo(meta.last_event_at)));
+    body.append(st);
+  }
+  const f1 = el('div', 'field'); f1.append(el('label', null, 'Page ID (ID da Página do Facebook)'));
+  const inPid = el('input'); inPid.id = 'ig-page-id'; inPid.placeholder = 'Ex.: 102938475610293';
+  if(meta) inPid.value = (meta.credentials || {}).page_id || ''; f1.append(inPid); body.append(f1);
+  const f2 = el('div', 'field'); f2.append(el('label', null, 'Page Token (System User — não expira)'));
+  const inTok = el('input'); inTok.id = 'ig-page-token'; inTok.type = 'password';
+  inTok.placeholder = meta ? 'deixe vazio para manter o token atual' : 'cole o token da Página';
+  f2.append(inTok); body.append(f2);
+  const save = el('button', 'btn btn-primary btn-sm', meta ? 'Salvar alterações' : '⚡ Conectar Meta');
+  save.id = 'ig-save-meta'; save.addEventListener('click', () => saveMeta(meta || null)); body.append(save);
+
+  // Ajuda: como configurar no app da Meta
+  body.append(igSec('⚙ Configurar no app da Meta'));
+  body.append(igCopyRow('URL do Webhook da Meta', CFG.SUPABASE_URL + '/functions/v1/meta-webhook'));
+  const help = el('p', 'm-sub', 'No app da Meta → Webhooks → objeto “page”: cole a URL acima e use o mesmo Verify Token (secret META_VERIFY_TOKEN do Supabase). Depois inscreva a Página. Passo a passo detalhado: docs/IMPLEMENTACAO.md, Parte 7.');
+  help.style.marginTop = '8px'; body.append(help);
+}
+async function saveMeta(existing){
+  const pid = $('#ig-page-id').value.trim();
+  const tok = $('#ig-page-token').value.trim();
+  if(!pid){ toast('Informe o Page ID.', '⚠'); return; }
+  if(!existing && !tok){ toast('Informe o Page Token (System User).', '⚠'); return; }
+  const btn = $('#ig-save-meta'); btn.disabled = true; btn.textContent = 'Salvando…';
+  try{
+    const creds = { page_id: pid }; if(tok) creds.page_token = tok;
+    if(existing){
+      const merged = Object.assign({}, existing.credentials || {}, creds);
+      const { error } = await SB.from('integrations').update({ credentials: merged, status: 'active' }).eq('id', existing.id);
+      if(error) throw error;
+    } else {
+      const { error } = await SB.from('integrations').insert({ org_id: IG_ORG.id, source: 'meta', display_name: 'Meta Lead Ads', status: 'active', credentials: creds });
+      if(error) throw error;
+    }
+    toast('Meta conectada para <b>' + IG_ORG.name + '</b>.', '⚡');
+    openInteg({ org: IG_ORG }); loadHQ();
+  }catch(err){
+    toast('Não deu: <b>' + (err.message || err) + '</b>', '⚠');
+    btn.disabled = false; btn.textContent = existing ? 'Salvar alterações' : '⚡ Conectar Meta';
+  }
+}
+$('#ig-close').addEventListener('click', () => $('#integ-modal').classList.remove('open'));
+
 function enterWorkspace(c){
   if(!isAdmin()) return;
   STATE.org = c.org;
